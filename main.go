@@ -42,16 +42,18 @@ const (
 
 // probeTargets are the symbols we uprobe in libssl.
 var probeTargets = []struct {
-	symbol string
-	isRet  bool
-	dir    string // "read", "write", or "sni"
+	symbol    string
+	isRet     bool
+	dir       string // "read", "write", or "sni"
+	extraArgs string // extra ftrace argument spec appended to the probe line
 }{
-	{"SSL_read", false, "read"},
-	{"SSL_read", true, "read"},
-	{"SSL_write", false, "write"},
-	{"SSL_read_ex", false, "read"},
-	{"SSL_write_ex", false, "write"},
-	{"SSL_get_servername", false, "sni"},
+	{"SSL_read", false, "read", ""},
+	{"SSL_read", true, "read", ""},
+	{"SSL_write", false, "write", ""},
+	{"SSL_read_ex", false, "read", ""},
+	{"SSL_write_ex", false, "write", ""},
+	// SSL_get_servername returns const char* — capture as uretprobe string
+	{"SSL_get_servername", true, "sni", "+0($retval):string"},
 }
 
 // ─── Options ──────────────────────────────────────────────────────────────────
@@ -365,6 +367,9 @@ func registerUprobes(libPath string) error {
 		seen[name] = true
 
 		line := fmt.Sprintf("%s:%s %s:0x%x", prefix, name, libPath, offset)
+		if t.extraArgs != "" {
+			line += " " + t.extraArgs
+		}
 		if err := appendToFile(uprobeEvents, line); err != nil {
 			if verbose {
 				fmt.Fprintf(os.Stderr, "  uprobe %s: %v\n", name, err)
@@ -412,8 +417,14 @@ func cleanupUprobes() {
 
 // ─── Trace event parsing ──────────────────────────────────────────────────────
 
-// trace line: curl-12345 [003] d... 123.456789: tls_write_SSL_write: (0x7f...)
-var traceRe = regexp.MustCompile(`^\s*(\S+)-(\d+)\s+\[\d+\].*\s+([\d.]+):\s+(tls_\w+)`)
+// Normal trace line:
+//   curl-12345 [003] d... 123.456789: tls_write_SSL_write: (0x7f...)
+// SNI uretprobe trace line:
+//   curl-12345 [003] d... 123.456789: tls_sni_SSL_get_servername: (0x7f...->0x0) arg1="api.github.com"
+var (
+	traceRe = regexp.MustCompile(`^\s*(\S+)-(\d+)\s+\[\d+\].*\s+([\d.]+):\s+(tls_\w+)`)
+	sniRe   = regexp.MustCompile(`arg1="([^"]*)"`)
+)
 
 type tlsEvent struct {
 	comm      string
@@ -421,6 +432,7 @@ type tlsEvent struct {
 	ts        float64
 	probeName string
 	dir       string
+	sni       string // non-empty only for dir=="sni"
 }
 
 func parseLine(line string) (*tlsEvent, bool) {
@@ -432,8 +444,12 @@ func parseLine(line string) (*tlsEvent, bool) {
 	ts, _ := strconv.ParseFloat(m[3], 64)
 
 	dir := "?"
+	var sni string
 	if strings.Contains(m[4], "_sni") {
 		dir = "sni"
+		if sm := sniRe.FindStringSubmatch(line); sm != nil {
+			sni = sm[1]
+		}
 	} else if strings.Contains(m[4], "_read") {
 		dir = "read"
 	} else if strings.Contains(m[4], "_write") {
@@ -446,6 +462,7 @@ func parseLine(line string) (*tlsEvent, bool) {
 		ts:        ts,
 		probeName: m[4],
 		dir:       dir,
+		sni:       sni,
 	}, true
 }
 
@@ -477,12 +494,11 @@ func printEvent(ev *tlsEvent) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// SNI events update the cache silently
+	// SNI events update the per-PID cache and are otherwise silent
 	if ev.dir == "sni" {
-		// The SNI string isn't available from just the trace line without
-		// reading the function argument — store a placeholder so we know
-		// the connection has a servername; actual value populated by
-		// /proc/net/tcp fallback until argument-capture uprobes are added.
+		if ev.sni != "" {
+			setSNI(ev.pid, ev.sni)
+		}
 		return
 	}
 
