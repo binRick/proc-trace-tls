@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 320" font-family="system-ui, sans-serif">
+  <rect width="700" height="320" rx="10" fill="#0a000f"/>
+
+  <!-- Title -->
+  <text x="350" y="30" text-anchor="middle" fill="#a855f7" font-size="13" letter-spacing="2" font-family="'Courier New', monospace">HOW IT WORKS</text>
+
+  <!-- App box -->
+  <rect x="40" y="60" width="130" height="50" rx="6" fill="#1a0a2e" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="105" y="81" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="bold">Your App</text>
+  <text x="105" y="97" text-anchor="middle" fill="#6b7280" font-size="10">(curl, python, etc)</text>
+
+  <!-- libssl box -->
+  <rect x="270" y="60" width="160" height="50" rx="6" fill="#1a0a2e" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="350" y="81" text-anchor="middle" fill="#e9d5ff" font-size="12" font-weight="bold">libssl.so</text>
+  <text x="350" y="97" text-anchor="middle" fill="#6b7280" font-size="10">SSL_read / SSL_write</text>
+
+  <!-- Arrow app → libssl -->
+  <line x1="170" y1="85" x2="270" y2="85" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="220" y="78" text-anchor="middle" fill="#6b7280" font-size="10">TLS calls</text>
+
+  <!-- Network -->
+  <rect x="530" y="60" width="130" height="50" rx="6" fill="#0d1117" stroke="#374151" stroke-width="1.5"/>
+  <text x="595" y="81" text-anchor="middle" fill="#9ca3af" font-size="12">🌐 Network</text>
+  <text x="595" y="97" text-anchor="middle" fill="#6b7280" font-size="10">encrypted bytes</text>
+
+  <!-- Arrow libssl → network -->
+  <line x1="430" y1="85" x2="530" y2="85" stroke="#374151" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <text x="480" y="78" text-anchor="middle" fill="#6b7280" font-size="10">ciphertext</text>
+
+  <!-- Uprobe tap -->
+  <rect x="270" y="160" width="160" height="50" rx="6" fill="#0d0d1a" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="350" y="181" text-anchor="middle" fill="#a855f7" font-size="12" font-weight="bold">ftrace uprobe</text>
+  <text x="350" y="197" text-anchor="middle" fill="#6b7280" font-size="10">kernel hook — no eBPF</text>
+
+  <!-- Arrow libssl ↓ uprobe -->
+  <line x1="350" y1="110" x2="350" y2="160" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr3)"/>
+
+  <!-- proc-trace-tls box -->
+  <rect x="270" y="255" width="160" height="50" rx="6" fill="#1a0a2e" stroke="#a855f7" stroke-width="2"/>
+  <text x="350" y="276" text-anchor="middle" fill="#e9d5ff" font-size="12" font-weight="bold">proc-trace-tls</text>
+  <text x="350" y="292" text-anchor="middle" fill="#a855f7" font-size="10">reads trace_pipe</text>
+
+  <!-- Arrow uprobe → tool -->
+  <line x1="350" y1="210" x2="350" y2="255" stroke="#a855f7" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <text x="370" y="237" fill="#6b7280" font-size="10">plaintext events</text>
+
+  <!-- defs for arrowheads -->
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#7c3aed"/>
+    </marker>
+    <marker id="arr2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#374151"/>
+    </marker>
+    <marker id="arr3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#a855f7"/>
+    </marker>
+  </defs>
+</svg>
