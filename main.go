@@ -46,14 +46,18 @@ var probeTargets = []struct {
 	isRet     bool
 	dir       string // "read", "write", or "sni"
 	extraArgs string // extra ftrace argument spec appended to the probe line
+	filter    string // written to the uprobe's filter file after enabling (empty = no filter)
 }{
-	{"SSL_read", false, "read", ""},
-	{"SSL_read", true, "read", ""},
-	{"SSL_write", false, "write", ""},
-	{"SSL_read_ex", false, "read", ""},
-	{"SSL_write_ex", false, "write", ""},
-	// SSL_get_servername returns const char* — capture as uretprobe string
-	{"SSL_get_servername", true, "sni", "+0($retval):string"},
+	{"SSL_read", false, "read", "", ""},
+	{"SSL_read", true, "read", "", ""},
+	{"SSL_write", false, "write", "", ""},
+	{"SSL_read_ex", false, "read", "", ""},
+	{"SSL_write_ex", false, "write", "", ""},
+	// SSL_get_servername returns const char* — capture as uretprobe string (server-side)
+	{"SSL_get_servername", true, "sni", "+0($retval):string", ""},
+	// SSL_ctrl(ssl, cmd=55, 0, hostname) is called by SSL_set_tlsext_host_name on the client side.
+	// Capture cmd (%si) and the hostname string (+0(%cx)) as named fields; filter to cmd==55.
+	{"SSL_ctrl", false, "sni", "cmd=%si:u64 sni=+0(%cx):string", "cmd==55"},
 }
 
 // ─── Options ──────────────────────────────────────────────────────────────────
@@ -392,6 +396,13 @@ func registerUprobes(libPath string) error {
 			fmt.Fprintf(os.Stderr, "  enable %s: %v\n", name, err)
 		}
 
+		if t.filter != "" {
+			filterPath := fmt.Sprintf("%s/events/uprobes/%s/filter", tracingBase, name)
+			if err := os.WriteFile(filterPath, []byte(t.filter), 0); err != nil && verbose {
+				fmt.Fprintf(os.Stderr, "  filter %s: %v\n", name, err)
+			}
+		}
+
 		registeredProbes = append(registeredProbes, probeEntry{
 			name: name, isRet: t.isRet, dir: t.dir, symbol: t.symbol,
 		})
@@ -429,7 +440,7 @@ func cleanupUprobes() {
 //   curl-12345 [003] d... 123.456789: tls_sni_SSL_get_servername: (0x7f...->0x0) arg1="api.github.com"
 var (
 	traceRe = regexp.MustCompile(`^\s*(\S+)-(\d+)\s+\[\d+\].*\s+([\d.]+):\s+(tls_\w+)`)
-	sniRe   = regexp.MustCompile(`arg1="([^"]*)"`)
+	sniRe   = regexp.MustCompile(`(?:arg1|sni)="([^"]*)"`)
 )
 
 type tlsEvent struct {
