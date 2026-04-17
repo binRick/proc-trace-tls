@@ -47,7 +47,8 @@ No SSL CA needed. No MitM proxy. No network tap. The plaintext is right there in
 | 🎯 **Per-process filter** | `-p PID[,PID,...]` to watch specific processes only |
 | 🔍 **Auto lib detection** | Scans `/proc/<pid>/maps` and common paths — finds libssl without config |
 | 🌐 **System-wide** | No filter = catch all TLS calls on the machine |
-| 📊 **Event stream** | Timestamp · PID · process name · direction (RX/TX) · symbol |
+| 📊 **Event stream** | Timestamp · PID · process name · direction (RX/TX) · symbol · **remote host** |
+| 🌐 **Host resolution** | SNI hostname via `SSL_get_servername` uprobe; falls back to `/proc/<pid>/net/tcp` + reverse DNS. Use `-R` for raw IPs. |
 | 🔌 **Zero deps** | Single static binary; requires only debugfs and root |
 | 🎨 **Color output** | ANSI colors auto-detected when stdout is a tty |
 | 📝 **Log to file** | `-o FILE` streams events to disk |
@@ -114,7 +115,7 @@ CGO_ENABLED=0 go build -ldflags="-s -w" -o proc-trace-tls .
 ## Usage
 
 ```
-proc-trace-tls [-achqQsvx] [-l LIB] [-o FILE] [-p PID[,PID,...]]
+proc-trace-tls [-achqQsvR] [-l LIB] [-o FILE] [-p PID[,PID,...]]
 ```
 
 ### Watch all TLS traffic system-wide
@@ -129,11 +130,11 @@ proc-trace-tls v0.1.0
   pids: all
 Watching 4 probe(s). Press Ctrl-C to stop.
 
-14:23:01.441  14821  curl      RX  SSL_read
-14:23:01.442  14821  curl      TX  SSL_write
-14:23:01.449  14821  curl      RX  SSL_read
-14:23:01.458  14905  python3   TX  SSL_write
-14:23:01.462  14905  python3   RX  SSL_read_ex
+14:23:01.441  14821  curl      RX  SSL_read     api.github.com:443
+14:23:01.442  14821  curl      TX  SSL_write    api.github.com:443
+14:23:01.449  14821  curl      RX  SSL_read     api.github.com:443
+14:23:01.458  14905  python3   TX  SSL_write    pypi.org:443
+14:23:01.462  14905  python3   RX  SSL_read_ex  pypi.org:443
 ```
 
 ### Trace a specific process
@@ -166,6 +167,7 @@ sudo proc-trace-tls -sq -o /var/log/tls-events.log
 | `-p PID[,...]` | Trace only these PIDs (comma-separated) |
 | `-q` | Suppress startup messages |
 | `-Q` | Suppress error messages |
+| `-R` | Skip reverse DNS — show raw `IP:port` instead of hostname |
 | `-s` | Summary only — no payload lines |
 | `-v` | Verbose probe registration output |
 | `-h` | Show help |
