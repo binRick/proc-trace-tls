@@ -272,10 +272,10 @@ func symbolOffset(libPath, sym string) (uint64, error) {
 		}
 	}
 
-	re := regexp.MustCompile(`(?m)^([0-9a-f]+)\s+\S+\s+\S+\s+` + regexp.QuoteMeta(sym) + `\b`)
+	re := regexp.MustCompile(`(?m)^([0-9a-f]+)\s+(?:[0-9a-f]+\s+)?\S+\s+` + regexp.QuoteMeta(sym) + `\b`)
 	m := re.FindStringSubmatch(string(data))
 	if m == nil {
-		re2 := regexp.MustCompile(`(?m)^([0-9a-f]+)\s+\S\s+` + regexp.QuoteMeta(sym) + `$`)
+		re2 := regexp.MustCompile(`(?m)^([0-9a-f]+)\s+\S\s+` + regexp.QuoteMeta(sym) + `\b`)
 		m = re2.FindStringSubmatch(string(data))
 	}
 	if m == nil {
@@ -366,6 +366,12 @@ func registerUprobes(libPath string) error {
 		}
 		seen[name] = true
 
+		// Remove any stale probe with this name (e.g. from a previous run killed without cleanup).
+		// Must disable before removing, and use the full group/name format.
+		enablePath := fmt.Sprintf("%s/events/uprobes/%s/enable", tracingBase, name)
+		_ = os.WriteFile(enablePath, []byte("0"), 0)
+		_ = appendToFile(uprobeEvents, "-:uprobes/"+name)
+
 		line := fmt.Sprintf("%s:%s %s:0x%x", prefix, name, libPath, offset)
 		if t.extraArgs != "" {
 			line += " " + t.extraArgs
@@ -381,7 +387,7 @@ func registerUprobes(libPath string) error {
 			fmt.Fprintf(os.Stderr, "  registered: %s @ 0x%x\n", name, offset)
 		}
 
-		enablePath := fmt.Sprintf("%s/events/uprobes/%s/enable", tracingBase, name)
+		enablePath = fmt.Sprintf("%s/events/uprobes/%s/enable", tracingBase, name)
 		if err := os.WriteFile(enablePath, []byte("1"), 0); err != nil && verbose {
 			fmt.Fprintf(os.Stderr, "  enable %s: %v\n", name, err)
 		}
@@ -411,7 +417,7 @@ func cleanupUprobes() {
 	for _, p := range registeredProbes {
 		enablePath := fmt.Sprintf("%s/events/uprobes/%s/enable", tracingBase, p.name)
 		os.WriteFile(enablePath, []byte("0"), 0)
-		appendToFile(uprobeEvents, "-"+p.name)
+		appendToFile(uprobeEvents, "-:uprobes/"+p.name)
 	}
 }
 
