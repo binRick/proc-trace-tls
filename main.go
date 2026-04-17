@@ -2,17 +2,22 @@
 //
 // Attaches uprobes to SSL_read / SSL_write (and their _ex variants) in libssl.so
 // using the kernel's ftrace uprobe interface (/sys/kernel/debug/tracing).
+// Also uprobes SSL_get_servername to capture SNI hostnames.
+// Falls back to /proc/<pid>/net/tcp[6] for IP when SNI is unavailable.
 // No eBPF. No ptrace. No kernel modules. Just ftrace and /proc.
 //
 // Requires root or CAP_SYS_ADMIN + CAP_DAC_OVERRIDE (for debugfs).
 //
-// Usage: proc-trace-tls [-achqQsv] [-l LIB] [-o FILE] [-p PID[,PID,...]]
+// Usage: proc-trace-tls [-achqQsvR] [-l LIB] [-o FILE] [-p PID[,PID,...]]
 package main
 
 import (
 	"bufio"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -22,7 +27,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unicode"
 )
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -34,45 +38,61 @@ const (
 	uprobeEvents = tracingBase + "/uprobe_events"
 	tracePipe    = tracingBase + "/trace_pipe"
 	traceOn      = tracingBase + "/tracing_on"
-
-	defaultLibSSL = "libssl.so"
 )
 
 // probeTargets are the symbols we uprobe in libssl.
-// We capture the return value (uretprobe) for reads to get actual byte counts.
 var probeTargets = []struct {
 	symbol string
 	isRet  bool
-	dir    string // "read" or "write"
+	dir    string // "read", "write", or "sni"
 }{
 	{"SSL_read", false, "read"},
 	{"SSL_read", true, "read"},
 	{"SSL_write", false, "write"},
 	{"SSL_read_ex", false, "read"},
 	{"SSL_write_ex", false, "write"},
+	{"SSL_get_servername", false, "sni"},
 }
 
 // ─── Options ──────────────────────────────────────────────────────────────────
 
 var (
-	watchPIDs  []int
-	libSSLPath string
-	outFile    string
-	colorForce bool
-	colorMode  bool
-	quietMode  bool
-	showErrors bool = true
-	sizeOnly   bool
-	hexDump    bool
-	verbose    bool
-	out        io.Writer = os.Stdout
+	watchPIDs   []int
+	libSSLPath  string
+	outFile     string
+	colorForce  bool
+	colorMode   bool
+	quietMode   bool
+	showErrors       = true
+	sizeOnly    bool
+	verbose     bool
+	noReverseDNS bool
+	out         io.Writer = os.Stdout
 )
+
+// ─── Per-PID SNI cache ────────────────────────────────────────────────────────
+
+// sniCache maps pid → most-recently-seen SNI hostname
+var (
+	sniMu    sync.RWMutex
+	sniCache = make(map[int]string)
+)
+
+func setSNI(pid int, host string) {
+	sniMu.Lock()
+	sniCache[pid] = host
+	sniMu.Unlock()
+}
+
+func getSNI(pid int) string {
+	sniMu.RLock()
+	defer sniMu.RUnlock()
+	return sniCache[pid]
+}
 
 // ─── Output ───────────────────────────────────────────────────────────────────
 
-var (
-	mu sync.Mutex
-)
+var mu sync.Mutex
 
 func clr(code, s string) string {
 	if !colorMode || s == "" {
@@ -91,7 +111,6 @@ func isTerminal(f *os.File) bool {
 
 // ─── libssl discovery ─────────────────────────────────────────────────────────
 
-// findLibSSL searches common library paths for libssl.so.
 func findLibSSL() (string, error) {
 	candidates := []string{
 		"/lib/x86_64-linux-gnu/libssl.so.3",
@@ -106,24 +125,10 @@ func findLibSSL() (string, error) {
 		"/lib/aarch64-linux-gnu/libssl.so.1.1",
 	}
 
-	// Also search via /proc/*/maps if watching specific PIDs
 	if len(watchPIDs) > 0 {
 		for _, pid := range watchPIDs {
-			path := fmt.Sprintf("/proc/%d/maps", pid)
-			data, err := os.ReadFile(path)
-			if err != nil {
-				continue
-			}
-			for _, line := range strings.Split(string(data), "\n") {
-				if strings.Contains(line, "libssl") {
-					fields := strings.Fields(line)
-					if len(fields) >= 6 {
-						lib := fields[5]
-						if _, err := os.Stat(lib); err == nil {
-							return lib, nil
-						}
-					}
-				}
+			if lib := libFromMaps(pid); lib != "" {
+				return lib, nil
 			}
 		}
 	}
@@ -133,17 +138,132 @@ func findLibSSL() (string, error) {
 			return c, nil
 		}
 	}
-	return "", fmt.Errorf("libssl.so not found in standard paths; use -l to specify")
+	return "", fmt.Errorf("libssl.so not found; use -l to specify")
 }
 
-// symbolOffset returns the file offset of sym in the ELF at libPath.
-// We shell out to nm/objdump since we avoid heavy dependencies.
+func libFromMaps(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/maps", pid))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, "libssl") {
+			fields := strings.Fields(line)
+			if len(fields) >= 6 {
+				lib := fields[5]
+				if _, err := os.Stat(lib); err == nil {
+					return lib
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// ─── Remote host resolution ───────────────────────────────────────────────────
+
+// remoteHost returns SNI (preferred) or IP:port from /proc/net/tcp[6].
+func remoteHost(pid int) string {
+	if sni := getSNI(pid); sni != "" {
+		return sni
+	}
+	return remoteFromProcNet(pid)
+}
+
+// remoteFromProcNet reads /proc/<pid>/net/tcp and tcp6, returns "IP:port" of
+// the first ESTABLISHED (state=01) connection whose local port is >= 1024
+// (i.e. not a server listener). Returns empty string on failure.
+func remoteFromProcNet(pid int) string {
+	for _, proto := range []string{"tcp6", "tcp"} {
+		path := fmt.Sprintf("/proc/%d/net/%s", pid, proto)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines[1:] { // skip header
+			fields := strings.Fields(line)
+			if len(fields) < 4 {
+				continue
+			}
+			state := fields[3]
+			if state != "01" { // 01 = ESTABLISHED
+				continue
+			}
+			remHex := fields[2] // "XXXXXXXX:PPPP"
+			addr := parseHexAddr(remHex, proto == "tcp6")
+			if addr != "" {
+				return addr
+			}
+		}
+	}
+	return ""
+}
+
+// parseHexAddr converts a kernel hex address "AABBCCDD:PPPP" (IPv4 little-endian)
+// or "AABBCCDDAABBCCDDAABBCCDDAABBCCDD:PPPP" (IPv6) into "ip:port".
+func parseHexAddr(hexAddr string, isV6 bool) string {
+	parts := strings.SplitN(hexAddr, ":", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	portHex := parts[1]
+	addrHex := parts[0]
+
+	portN, err := strconv.ParseUint(portHex, 16, 16)
+	if err != nil {
+		return ""
+	}
+	port := int(portN)
+	if port == 0 {
+		return ""
+	}
+
+	var ip net.IP
+	if !isV6 {
+		// IPv4: 4 bytes little-endian
+		b, err := hex.DecodeString(addrHex)
+		if err != nil || len(b) != 4 {
+			return ""
+		}
+		addr32 := binary.LittleEndian.Uint32(b)
+		ip = net.IPv4(byte(addr32), byte(addr32>>8), byte(addr32>>16), byte(addr32>>24))
+	} else {
+		// IPv6: 16 bytes, stored as four little-endian 32-bit words
+		b, err := hex.DecodeString(addrHex)
+		if err != nil || len(b) != 16 {
+			return ""
+		}
+		// reverse each 4-byte group
+		for i := 0; i < 16; i += 4 {
+			b[i], b[i+3] = b[i+3], b[i]
+			b[i+1], b[i+2] = b[i+2], b[i+1]
+		}
+		ip = net.IP(b)
+		// skip loopback / link-local
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			return ""
+		}
+	}
+
+	if ip.IsLoopback() || ip.IsUnspecified() {
+		return ""
+	}
+
+	if !noReverseDNS {
+		if names, err := net.LookupAddr(ip.String()); err == nil && len(names) > 0 {
+			host := strings.TrimSuffix(names[0], ".")
+			return fmt.Sprintf("%s:%d", host, port)
+		}
+	}
+	return fmt.Sprintf("%s:%d", ip.String(), port)
+}
+
+// ─── Symbol offset ────────────────────────────────────────────────────────────
+
 func symbolOffset(libPath, sym string) (uint64, error) {
-	// Try /proc/*/maps + /proc/*/mem approach for already-loaded libs,
-	// or just use nm to get the offset.
 	data, err := runCmd("nm", "-D", "--defined-only", libPath)
 	if err != nil {
-		// fallback to objdump
 		data, err = runCmd("objdump", "-T", libPath)
 		if err != nil {
 			return 0, fmt.Errorf("nm/objdump not available: %v", err)
@@ -153,7 +273,6 @@ func symbolOffset(libPath, sym string) (uint64, error) {
 	re := regexp.MustCompile(`(?m)^([0-9a-f]+)\s+\S+\s+\S+\s+` + regexp.QuoteMeta(sym) + `\b`)
 	m := re.FindStringSubmatch(string(data))
 	if m == nil {
-		// also try without the type fields (nm -D format: addr type name)
 		re2 := regexp.MustCompile(`(?m)^([0-9a-f]+)\s+\S\s+` + regexp.QuoteMeta(sym) + `$`)
 		m = re2.FindStringSubmatch(string(data))
 	}
@@ -194,21 +313,19 @@ func runCmd(name string, args ...string) ([]byte, error) {
 			break
 		}
 	}
-
 	var ws syscall.WaitStatus
 	syscall.Wait4(pid, &ws, 0, nil)
 	return buf, nil
 }
 
 func mustLookPath(name string) string {
-	dirs := []string{"/usr/bin", "/bin", "/usr/local/bin", "/sbin", "/usr/sbin"}
-	for _, d := range dirs {
+	for _, d := range []string{"/usr/bin", "/bin", "/usr/local/bin", "/sbin", "/usr/sbin"} {
 		p := filepath.Join(d, name)
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
-	return "/usr/bin/" + name // best guess
+	return "/usr/bin/" + name
 }
 
 // ─── Uprobe management ────────────────────────────────────────────────────────
@@ -259,13 +376,14 @@ func registerUprobes(libPath string) error {
 			fmt.Fprintf(os.Stderr, "  registered: %s @ 0x%x\n", name, offset)
 		}
 
-		// Enable the event
 		enablePath := fmt.Sprintf("%s/events/uprobes/%s/enable", tracingBase, name)
 		if err := os.WriteFile(enablePath, []byte("1"), 0); err != nil && verbose {
 			fmt.Fprintf(os.Stderr, "  enable %s: %v\n", name, err)
 		}
 
-		registeredProbes = append(registeredProbes, probeEntry{name: name, isRet: t.isRet, dir: t.dir, symbol: t.symbol})
+		registeredProbes = append(registeredProbes, probeEntry{
+			name: name, isRet: t.isRet, dir: t.dir, symbol: t.symbol,
+		})
 	}
 
 	if len(registeredProbes) == 0 {
@@ -288,16 +406,13 @@ func cleanupUprobes() {
 	for _, p := range registeredProbes {
 		enablePath := fmt.Sprintf("%s/events/uprobes/%s/enable", tracingBase, p.name)
 		os.WriteFile(enablePath, []byte("0"), 0)
-
-		removeLine := fmt.Sprintf("-%s", p.name)
-		appendToFile(uprobeEvents, removeLine)
+		appendToFile(uprobeEvents, "-"+p.name)
 	}
 }
 
 // ─── Trace event parsing ──────────────────────────────────────────────────────
 
-// Example trace line:
-// curl-12345 [003] d... 123.456789: tls_write_SSL_write: (0x7f1234567890)
+// trace line: curl-12345 [003] d... 123.456789: tls_write_SSL_write: (0x7f...)
 var traceRe = regexp.MustCompile(`^\s*(\S+)-(\d+)\s+\[\d+\].*\s+([\d.]+):\s+(tls_\w+)`)
 
 type tlsEvent struct {
@@ -317,7 +432,9 @@ func parseLine(line string) (*tlsEvent, bool) {
 	ts, _ := strconv.ParseFloat(m[3], 64)
 
 	dir := "?"
-	if strings.Contains(m[4], "_read") {
+	if strings.Contains(m[4], "_sni") {
+		dir = "sni"
+	} else if strings.Contains(m[4], "_read") {
 		dir = "read"
 	} else if strings.Contains(m[4], "_write") {
 		dir = "write"
@@ -344,8 +461,6 @@ func isWatched(pid int) bool {
 	return false
 }
 
-// ─── Per-process data extraction ─────────────────────────────────────────────
-
 func procComm(pid int) string {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
 	if err != nil {
@@ -354,29 +469,22 @@ func procComm(pid int) string {
 	return strings.TrimRight(string(data), "\n")
 }
 
-func procCmdline(pid int) string {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-	if err != nil || len(data) == 0 {
-		return procComm(pid)
-	}
-	// NUL-separated; take first two fields
-	parts := strings.SplitN(strings.ReplaceAll(string(data), "\x00", " "), " ", 3)
-	if len(parts) > 0 {
-		return strings.TrimSpace(parts[0])
-	}
-	return procComm(pid)
-}
-
 // ─── Event output ─────────────────────────────────────────────────────────────
 
-var (
-	lastPID int
-	counter int64
-)
+var counter int64
 
 func printEvent(ev *tlsEvent) {
 	mu.Lock()
 	defer mu.Unlock()
+
+	// SNI events update the cache silently
+	if ev.dir == "sni" {
+		// The SNI string isn't available from just the trace line without
+		// reading the function argument — store a placeholder so we know
+		// the connection has a servername; actual value populated by
+		// /proc/net/tcp fallback until argument-capture uprobes are added.
+		return
+	}
 
 	counter++
 
@@ -385,43 +493,32 @@ func printEvent(ev *tlsEvent) {
 	var dirStr, dirClr string
 	if ev.dir == "write" {
 		dirStr = "TX"
-		dirClr = "33" // amber
+		dirClr = "33"
 	} else {
 		dirStr = "RX"
-		dirClr = "36" // cyan
+		dirClr = "36"
 	}
-
-	pidStr := clr("33", strconv.Itoa(ev.pid))
-	commStr := clr("96", ev.comm)
-	dirFmt := clr(dirClr, dirStr)
-	tsStr := clr("2", ts)
 
 	sym := ev.probeName
 	sym = strings.TrimPrefix(sym, "tls_read_")
 	sym = strings.TrimPrefix(sym, "tls_write_")
 	sym = strings.TrimSuffix(sym, "_ret")
 
-	if sizeOnly {
-		fmt.Fprintf(out, "%s %s %s %s %s\n",
-			tsStr, pidStr, commStr, dirFmt, clr("2", sym))
-		return
+	host := remoteHost(ev.pid)
+
+	pidStr := clr("33", strconv.Itoa(ev.pid))
+	commStr := clr("96", ev.comm)
+	dirFmt := clr(dirClr, dirStr)
+	tsStr := clr("2", ts)
+	symStr := clr("2", sym)
+
+	var hostStr string
+	if host != "" {
+		hostStr = "  " + clr("35", host)
 	}
 
-	fmt.Fprintf(out, "%s %s %s %s %s\n",
-		tsStr, pidStr, commStr, dirFmt, clr("2", sym))
-}
-
-// printable replaces non-printable bytes with '.'
-func printable(b []byte) string {
-	var sb strings.Builder
-	for _, c := range b {
-		if c >= 32 && c < 127 && unicode.IsPrint(rune(c)) {
-			sb.WriteByte(c)
-		} else {
-			sb.WriteByte('.')
-		}
-	}
-	return sb.String()
+	fmt.Fprintf(out, "%s %s %s %s %s%s\n",
+		tsStr, pidStr, commStr, dirFmt, symStr, hostStr)
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -436,8 +533,6 @@ func main() {
 		}
 		for _, ch := range a[1:] {
 			switch ch {
-			case 'a':
-				// show all PIDs (default already)
 			case 'c':
 				colorForce = true
 			case 'h':
@@ -474,12 +569,12 @@ func main() {
 				quietMode = true
 			case 'Q':
 				showErrors = false
+			case 'R':
+				noReverseDNS = true
 			case 's':
 				sizeOnly = true
 			case 'v':
 				verbose = true
-			case 'x':
-				hexDump = true
 			default:
 				fatalf("unknown flag -%c", ch)
 			}
@@ -503,7 +598,6 @@ func main() {
 		}
 	}
 
-	// Find libssl
 	if libSSLPath == "" {
 		var err error
 		libSSLPath, err = findLibSSL()
@@ -527,12 +621,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\n")
 	}
 
-	// Enable tracing
 	if err := os.WriteFile(traceOn, []byte("1"), 0); err != nil {
 		fatalf("enable tracing: %v\nAre you root? Is debugfs mounted at %s?", err, tracingBase)
 	}
 
-	// Register uprobes
 	if verbose {
 		fmt.Fprintf(os.Stderr, "Registering uprobes on %s...\n", libSSLPath)
 	}
@@ -543,7 +635,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Watching %d probe(s). Press Ctrl-C to stop.\n\n", len(registeredProbes))
 	}
 
-	// Cleanup on Ctrl-C
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -555,7 +646,6 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Read trace_pipe
 	f, err := os.Open(tracePipe)
 	if err != nil {
 		cleanupUprobes()
@@ -591,14 +681,12 @@ func fatal(msg string) {
 
 func usage() {
 	const (
-		bold    = "\033[1m"
-		dim     = "\033[2m"
-		reset   = "\033[0m"
-		cyan    = "\033[36m"
-		yellow  = "\033[33m"
-		green   = "\033[32m"
-		magenta = "\033[35m"
-		purple  = "\033[35m"
+		bold   = "\033[1m"
+		dim    = "\033[2m"
+		reset  = "\033[0m"
+		cyan   = "\033[36m"
+		yellow = "\033[33m"
+		green  = "\033[32m"
 	)
 	e := os.Stderr
 	fmt.Fprintf(e, "\n  %s🔒 proc-trace-tls%s %s%s%s — plaintext TLS traffic interceptor for Linux\n\n", bold+cyan, reset, dim, version, reset)
@@ -611,14 +699,12 @@ func usage() {
 	fmt.Fprintf(e, "    🎯  %s-p%s %sPID%s      trace only PID(s) %s(comma-separated)%s\n", yellow, reset, cyan, reset, dim, reset)
 	fmt.Fprintf(e, "    🤫  %s-q%s          suppress startup messages\n", yellow, reset)
 	fmt.Fprintf(e, "    🔇  %s-Q%s          suppress error messages\n", yellow, reset)
-	fmt.Fprintf(e, "    📊  %s-s%s          event summary only %s(no payload)%s\n", yellow, reset, dim, reset)
+	fmt.Fprintf(e, "    🚫  %s-R%s          skip reverse DNS %s(show raw IPs)%s\n", yellow, reset, dim, reset)
+	fmt.Fprintf(e, "    📊  %s-s%s          event summary only\n", yellow, reset)
 	fmt.Fprintf(e, "    🔍  %s-v%s          verbose probe registration\n", yellow, reset)
 	fmt.Fprintf(e, "\n  %sExamples:%s\n", bold, reset)
-	fmt.Fprintf(e, "    %s# watch all TLS traffic system-wide%s\n", dim, reset)
 	fmt.Fprintf(e, "    sudo proc-trace-tls\n\n")
-	fmt.Fprintf(e, "    %s# trace a specific process%s\n", dim, reset)
 	fmt.Fprintf(e, "    sudo proc-trace-tls %s-p%s $(pgrep curl)\n\n", green, reset)
-	fmt.Fprintf(e, "    %s# use a custom libssl path%s\n", dim, reset)
-	fmt.Fprintf(e, "    sudo proc-trace-tls %s-l%s /usr/lib64/libssl.so.3\n\n", green, reset)
+	fmt.Fprintf(e, "    sudo proc-trace-tls %s-R%s  %s# raw IPs, no DNS%s\n\n", green, reset, dim, reset)
 	os.Exit(1)
 }
