@@ -1,101 +1,56 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="860" height="370" viewBox="0 0 860 370" font-family="'Courier New',Courier,monospace">
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="335" viewBox="0 0 760 335">
   <defs>
-    <linearGradient id="hdr" x1="0" y1="0" x2="1" y2="0">
+    <linearGradient id="tbg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#1a0a2e"/>
-      <stop offset="100%" stop-color="#0d0d1a"/>
+      <stop offset="100%" stop-color="#0d0820"/>
     </linearGradient>
   </defs>
 
-  <!-- window bg -->
-  <rect width="860" height="370" rx="10" fill="#08000e"/>
-  <!-- title bar -->
-  <rect width="860" height="36" rx="10" fill="url(#hdr)"/>
-  <rect y="26" width="860" height="10" fill="#1a0a2e"/>
+  <!-- shadow -->
+  <rect x="4" y="6" width="752" height="325" rx="12" fill="rgba(0,0,0,0.45)"/>
+  <!-- window -->
+  <rect width="752" height="325" rx="12" fill="#08000e" stroke="#2d1b4e" stroke-width="1"/>
+  <!-- titlebar -->
+  <rect width="752" height="36" rx="12" fill="url(#tbg)"/>
+  <rect y="24" width="752" height="12" fill="#1a0a2e"/>
+  <line x1="0" y1="36" x2="752" y2="36" stroke="#2d1b4e" stroke-width="1"/>
   <!-- traffic lights -->
-  <circle cx="22" cy="18" r="6" fill="#ff5f57"/>
-  <circle cx="42" cy="18" r="6" fill="#febc2e"/>
-  <circle cx="62" cy="18" r="6" fill="#28c840"/>
+  <circle cx="20" cy="18" r="6" fill="#ff5f57"/>
+  <circle cx="40" cy="18" r="6" fill="#febc2e"/>
+  <circle cx="60" cy="18" r="6" fill="#28c840"/>
   <!-- title -->
-  <text x="430" y="23" text-anchor="middle" fill="#4b3d6b" font-size="11" letter-spacing="1">proc-trace-tls — bash</text>
+  <text x="376" y="23" text-anchor="middle" font-family="'SF Mono','Fira Code','Courier New',monospace" font-size="12" fill="#4b3d6b">proc-trace-tls — bash</text>
 
   <!-- prompt -->
-  <text x="20" y="60" fill="#4b5563" font-size="13">$</text>
-  <text x="34" y="60" fill="#fbbf24" font-size="13">sudo</text>
-  <text x="84" y="60" fill="#67e8f9" font-size="13">proc-trace-tls</text>
-  <text x="232" y="60" fill="#c4b5fd" font-size="13">-p</text>
-  <text x="252" y="60" fill="#fbbf24" font-size="13">$(pgrep curl)</text>
+  <text xml:space="preserve" x="20" y="62" font-family="'Courier New',Consolas,'Lucida Console',monospace" font-size="13"><tspan fill="#6b7280">$</tspan><tspan fill="#fbbf24"> sudo </tspan><tspan fill="#c084fc">proc-trace-tls</tspan><tspan fill="#a855f7"> -p </tspan><tspan fill="#fbbf24">$(pgrep curl)</tspan></text>
 
-  <!-- startup lines -->
-  <text x="20" y="84"  fill="#a855f7" font-size="12">proc-trace-tls v0.3.0</text>
-  <text x="20" y="100" fill="#4b3d6b" font-size="12">  lib : /lib/x86_64-linux-gnu/libssl.so.3</text>
-  <text x="20" y="116" fill="#4b3d6b" font-size="12">  pids: 14821</text>
-  <text x="20" y="132" fill="#4b3d6b" font-size="12">Watching 5 probe(s). Press Ctrl-C to stop.</text>
+  <!-- startup -->
+  <text xml:space="preserve" x="20" y="84"  font-family="'Courier New',Consolas,monospace" font-size="13"><tspan fill="#a855f7">proc-trace-tls v0.3.0</tspan></text>
+  <text xml:space="preserve" x="20" y="102" font-family="'Courier New',Consolas,monospace" font-size="13"><tspan fill="#3d2f5a">  lib : /lib/x86_64-linux-gnu/libssl.so.3</tspan></text>
+  <text xml:space="preserve" x="20" y="120" font-family="'Courier New',Consolas,monospace" font-size="13"><tspan fill="#3d2f5a">  pids: </tspan><tspan fill="#fbbf24">14821</tspan></text>
+  <text xml:space="preserve" x="20" y="138" font-family="'Courier New',Consolas,monospace" font-size="13"><tspan fill="#3d2f5a">Watching 5 probe(s). Press Ctrl-C to stop.</tspan></text>
 
-  <!-- ─── event rows ─── -->
-  <!-- row 1: curl RX -->
-  <text x="20"  y="158" fill="#374151" font-size="12">14:23:01.441</text>
-  <text x="128" y="158" fill="#fbbf24" font-size="12">14821</text>
-  <text x="176" y="158" fill="#67e8f9" font-size="12">curl   </text>
-  <rect x="228" y="146" width="28" height="16" rx="3" fill="#0c2e3a"/>
-  <text x="232" y="158" fill="#22d3ee" font-size="12" font-weight="bold">RX</text>
-  <text x="270" y="158" fill="#4b3d6b" font-size="12">SSL_read      </text>
-  <text x="422" y="158" fill="#a855f7" font-size="12">api.github.com:443</text>
+  <!-- event rows: TS  PID    COMM      DIR  SYMBOL        HOST -->
 
-  <!-- row 2: curl TX -->
-  <text x="20"  y="178" fill="#374151" font-size="12">14:23:01.442</text>
-  <text x="128" y="178" fill="#fbbf24" font-size="12">14821</text>
-  <text x="176" y="178" fill="#67e8f9" font-size="12">curl   </text>
-  <rect x="228" y="166" width="28" height="16" rx="3" fill="#2d1200"/>
-  <text x="232" y="178" fill="#fb923c" font-size="12" font-weight="bold">TX</text>
-  <text x="270" y="178" fill="#4b3d6b" font-size="12">SSL_write     </text>
-  <text x="422" y="178" fill="#a855f7" font-size="12">api.github.com:443</text>
+  <!-- row 1 -->
+  <text xml:space="preserve" x="20" y="164" font-family="'Courier New',Consolas,monospace" font-size="13"><tspan fill="#374151">14:23:01.441  </tspan><tspan fill="#fbbf24">14821</tspan><tspan fill="#374151">  </tspan><tspan fill="#67e8f9">curl      </tspan><tspan fill="#22d3ee">RX</tspan><tspan fill="#374151">  </tspan><tspan fill="#4b3d6b">SSL_read      </tspan><tspan fill="#a855f7">api.github.com:443</tspan></text>
 
-  <!-- row 3: curl RX -->
-  <text x="20"  y="198" fill="#374151" font-size="12">14:23:01.449</text>
-  <text x="128" y="198" fill="#fbbf24" font-size="12">14821</text>
-  <text x="176" y="198" fill="#67e8f9" font-size="12">curl   </text>
-  <rect x="228" y="186" width="28" height="16" rx="3" fill="#0c2e3a"/>
-  <text x="232" y="198" fill="#22d3ee" font-size="12" font-weight="bold">RX</text>
-  <text x="270" y="198" fill="#4b3d6b" font-size="12">SSL_read      </text>
-  <text x="422" y="198" fill="#a855f7" font-size="12">api.github.com:443</text>
+  <!-- row 2 -->
+  <text xml:space="preserve" x="20" y="184" font-family="'Courier New',Consolas,monospace" font-size="13"><tspan fill="#374151">14:23:01.442  </tspan><tspan fill="#fbbf24">14821</tspan><tspan fill="#374151">  </tspan><tspan fill="#67e8f9">curl      </tspan><tspan fill="#fb923c">TX</tspan><tspan fill="#374151">  </tspan><tspan fill="#4b3d6b">SSL_write     </tspan><tspan fill="#a855f7">api.github.com:443</tspan></text>
 
-  <!-- row 4: python TX -->
-  <text x="20"  y="218" fill="#374151" font-size="12">14:23:01.458</text>
-  <text x="128" y="218" fill="#fbbf24" font-size="12">14905</text>
-  <text x="176" y="218" fill="#c4b5fd" font-size="12">python3</text>
-  <rect x="240" y="206" width="28" height="16" rx="3" fill="#2d1200"/>
-  <text x="244" y="218" fill="#fb923c" font-size="12" font-weight="bold">TX</text>
-  <text x="282" y="218" fill="#4b3d6b" font-size="12">SSL_write     </text>
-  <text x="422" y="218" fill="#a855f7" font-size="12">pypi.org:443</text>
+  <!-- row 3 -->
+  <text xml:space="preserve" x="20" y="204" font-family="'Courier New',Consolas,monospace" font-size="13"><tspan fill="#374151">14:23:01.449  </tspan><tspan fill="#fbbf24">14821</tspan><tspan fill="#374151">  </tspan><tspan fill="#67e8f9">curl      </tspan><tspan fill="#22d3ee">RX</tspan><tspan fill="#374151">  </tspan><tspan fill="#4b3d6b">SSL_read      </tspan><tspan fill="#a855f7">api.github.com:443</tspan></text>
 
-  <!-- row 5: python RX -->
-  <text x="20"  y="238" fill="#374151" font-size="12">14:23:01.462</text>
-  <text x="128" y="238" fill="#fbbf24" font-size="12">14905</text>
-  <text x="176" y="238" fill="#c4b5fd" font-size="12">python3</text>
-  <rect x="240" y="226" width="28" height="16" rx="3" fill="#0c2e3a"/>
-  <text x="244" y="238" fill="#22d3ee" font-size="12" font-weight="bold">RX</text>
-  <text x="282" y="238" fill="#4b3d6b" font-size="12">SSL_read_ex   </text>
-  <text x="422" y="238" fill="#a855f7" font-size="12">pypi.org:443</text>
+  <!-- row 4 -->
+  <text xml:space="preserve" x="20" y="224" font-family="'Courier New',Consolas,monospace" font-size="13"><tspan fill="#374151">14:23:01.458  </tspan><tspan fill="#fbbf24">14905</tspan><tspan fill="#374151">  </tspan><tspan fill="#c4b5fd">python3   </tspan><tspan fill="#fb923c">TX</tspan><tspan fill="#374151">  </tspan><tspan fill="#4b3d6b">SSL_write     </tspan><tspan fill="#a855f7">pypi.org:443</tspan></text>
 
-  <!-- row 6: node TX -->
-  <text x="20"  y="258" fill="#374151" font-size="12">14:23:01.471</text>
-  <text x="128" y="258" fill="#fbbf24" font-size="12">22011</text>
-  <text x="176" y="258" fill="#86efac" font-size="12">node   </text>
-  <rect x="228" y="246" width="28" height="16" rx="3" fill="#2d1200"/>
-  <text x="232" y="258" fill="#fb923c" font-size="12" font-weight="bold">TX</text>
-  <text x="270" y="258" fill="#4b3d6b" font-size="12">SSL_write     </text>
-  <text x="422" y="258" fill="#a855f7" font-size="12">registry.npmjs.org:443</text>
+  <!-- row 5 -->
+  <text xml:space="preserve" x="20" y="244" font-family="'Courier New',Consolas,monospace" font-size="13"><tspan fill="#374151">14:23:01.462  </tspan><tspan fill="#fbbf24">14905</tspan><tspan fill="#374151">  </tspan><tspan fill="#c4b5fd">python3   </tspan><tspan fill="#22d3ee">RX</tspan><tspan fill="#374151">  </tspan><tspan fill="#4b3d6b">SSL_read_ex   </tspan><tspan fill="#a855f7">pypi.org:443</tspan></text>
 
-  <!-- row 7: node RX -->
-  <text x="20"  y="278" fill="#374151" font-size="12">14:23:01.473</text>
-  <text x="128" y="278" fill="#fbbf24" font-size="12">22011</text>
-  <text x="176" y="278" fill="#86efac" font-size="12">node   </text>
-  <rect x="228" y="266" width="28" height="16" rx="3" fill="#0c2e3a"/>
-  <text x="232" y="278" fill="#22d3ee" font-size="12" font-weight="bold">RX</text>
-  <text x="270" y="278" fill="#4b3d6b" font-size="12">SSL_read      </text>
-  <text x="422" y="278" fill="#a855f7" font-size="12">registry.npmjs.org:443</text>
+  <!-- row 6 -->
+  <text xml:space="preserve" x="20" y="264" font-family="'Courier New',Consolas,monospace" font-size="13"><tspan fill="#374151">14:23:01.471  </tspan><tspan fill="#fbbf24">22011</tspan><tspan fill="#374151">  </tspan><tspan fill="#86efac">node      </tspan><tspan fill="#fb923c">TX</tspan><tspan fill="#374151">  </tspan><tspan fill="#4b3d6b">SSL_write     </tspan><tspan fill="#a855f7">registry.npmjs.org:443</tspan></text>
 
   <!-- ctrl-c + summary -->
-  <text x="20" y="310" fill="#374151" font-size="12">^C</text>
-  <text x="20" y="328" fill="#374151" font-size="12">captured 7 TLS events</text>
+  <text xml:space="preserve" x="20" y="294" font-family="'Courier New',Consolas,monospace" font-size="13"><tspan fill="#374151">^C</tspan></text>
+  <text xml:space="preserve" x="20" y="312" font-family="'Courier New',Consolas,monospace" font-size="13"><tspan fill="#374151">captured 6 TLS events</tspan></text>
 </svg>
