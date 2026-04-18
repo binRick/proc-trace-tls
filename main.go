@@ -34,10 +34,11 @@ import (
 var version = "dev"
 
 const (
-	tracingBase  = "/sys/kernel/debug/tracing"
-	uprobeEvents = tracingBase + "/uprobe_events"
-	tracePipe    = tracingBase + "/trace_pipe"
-	traceOn      = tracingBase + "/tracing_on"
+	tracingBase    = "/sys/kernel/debug/tracing"
+	uprobeEvents   = tracingBase + "/uprobe_events"
+	tracePipe      = tracingBase + "/trace_pipe"
+	traceOn        = tracingBase + "/tracing_on"
+	currentTracer  = tracingBase + "/current_tracer"
 )
 
 // probeTargets are the symbols we uprobe in libssl.
@@ -117,6 +118,17 @@ func isTerminal(f *os.File) bool {
 
 // ─── libssl discovery ─────────────────────────────────────────────────────────
 
+// resolveLib resolves a library path to its real path, following all symlinks.
+// The kernel's uprobe mechanism does NOT follow symlinks, so we must pass the
+// real (non-symlink) path or the uprobe will be attached to the wrong inode.
+func resolveLib(path string) string {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path
+	}
+	return real
+}
+
 func findLibSSL() (string, error) {
 	candidates := []string{
 		"/lib/x86_64-linux-gnu/libssl.so.3",
@@ -141,7 +153,7 @@ func findLibSSL() (string, error) {
 
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil {
-			return c, nil
+			return resolveLib(c), nil
 		}
 	}
 	return "", fmt.Errorf("libssl.so not found; use -l to specify")
@@ -158,7 +170,7 @@ func libFromMaps(pid int) string {
 			if len(fields) >= 6 {
 				lib := fields[5]
 				if _, err := os.Stat(lib); err == nil {
-					return lib
+					return resolveLib(lib)
 				}
 			}
 		}
@@ -434,12 +446,14 @@ func cleanupUprobes() {
 
 // ─── Trace event parsing ──────────────────────────────────────────────────────
 
-// Normal trace line:
+// Normal trace line (older kernels):
 //   curl-12345 [003] d... 123.456789: tls_write_SSL_write: (0x7f...)
+// Normal trace line (kernel 6.x — includes (TGID) between pid and cpu):
+//   curl-12345 (12345) [003] DBZff 123.456789: tls_write_SSL_write: (0x7f...)
 // SNI uretprobe trace line:
 //   curl-12345 [003] d... 123.456789: tls_sni_SSL_get_servername: (0x7f...->0x0) arg1="api.github.com"
 var (
-	traceRe = regexp.MustCompile(`^\s*(\S+)-(\d+)\s+\[\d+\].*\s+([\d.]+):\s+(tls_\w+)`)
+	traceRe = regexp.MustCompile(`^\s*(\S+)-(\d+)\s+(?:\(\S+\)\s+)?\[\d+\].*\s+([\d.]+):\s+(tls_\w+)`)
 	sniRe   = regexp.MustCompile(`(?:arg1|sni)="([^"]*)"`)
 )
 
@@ -664,6 +678,12 @@ func main() {
 
 	if err := os.WriteFile(traceOn, []byte("1"), 0); err != nil {
 		fatalf("enable tracing: %v\nAre you root? Is debugfs mounted at %s?", err, tracingBase)
+	}
+
+	// Switch to the no-op tracer so the ring buffer isn't flooded with
+	// function-tracer events, which would drown out or drop uprobe hits.
+	if err := os.WriteFile(currentTracer, []byte("nop"), 0); err != nil && verbose {
+		fmt.Fprintf(os.Stderr, "  warning: could not set current_tracer to nop: %v\n", err)
 	}
 
 	if verbose {
