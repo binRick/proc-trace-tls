@@ -506,6 +506,7 @@ func procComm(pid int) string {
 // ─── Event output ─────────────────────────────────────────────────────────────
 
 var counter int64
+var connSeen = make(map[string]bool)
 
 func printEvent(ev *tlsEvent) {
 	mu.Lock()
@@ -518,6 +519,15 @@ func printEvent(ev *tlsEvent) {
 		}
 		return
 	}
+
+	host := remoteHost(ev.pid)
+
+	// One line per (pid, host) connection — suppress duplicate read/write events
+	key := fmt.Sprintf("%d|%s", ev.pid, host)
+	if connSeen[key] {
+		return
+	}
+	connSeen[key] = true
 
 	counter++
 
@@ -536,8 +546,6 @@ func printEvent(ev *tlsEvent) {
 	sym = strings.TrimPrefix(sym, "tls_read_")
 	sym = strings.TrimPrefix(sym, "tls_write_")
 	sym = strings.TrimSuffix(sym, "_ret")
-
-	host := remoteHost(ev.pid)
 
 	pidStr := clr("33", strconv.Itoa(ev.pid))
 	commStr := clr("96", ev.comm)
